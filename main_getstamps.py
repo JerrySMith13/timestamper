@@ -23,6 +23,8 @@ play_msg = font.render("press pause to stop", True, (255, 255, 255))
 
 paused = False
 
+timestamps = []
+
 pygame.mixer.music.play()
 while True:
     for event in pygame.event.get():
@@ -39,9 +41,15 @@ while True:
                     pygame.mixer.music.pause()
                     screen.fill((0, 0, 0))
                     screen.blit(pause_msg, (20, 20))
+            if event.key == pygame.K_w:
+                if not paused:
+                    timestamps.append(pygame.mixer.music.get_pos() / 1000)
+                    print("timestamp added:", timestamps[-1])
         if event.type == pygame.QUIT:
             pygame.mixer.music.stop()
             pygame.quit()
+            print(timestamps)
             sys.exit()
     pygame.display.flip()
     pygame.time.Clock().tick(120)
+
