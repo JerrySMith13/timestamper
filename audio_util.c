@@ -4,6 +4,9 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
+
+#include <SDL2/SDL.h>
+
 #include "audio_util.h"
 
 struct AudioFile* AudioFile_from_file(const char* filename){
@@ -12,6 +15,7 @@ struct AudioFile* AudioFile_from_file(const char* filename){
     // Initialize the input file and turn it into format_context
     if(avformat_open_input(&format_context, filename, NULL, NULL) != 0) {
         fprintf(stderr, "Could not open video file: %s\n", filename);
+        avformat_free_context(format_context);
         return NULL;
     }
 
@@ -49,23 +53,26 @@ struct AudioFile* AudioFile_from_file(const char* filename){
     AVCodecContext* codec_context = avcodec_alloc_context3(codec);
 
     if (avcodec_parameters_to_context(codec_context, codec_params) < 0){
-        fprintf(stderr, "Error: could not open codec.");
+        fprintf(stderr, "Error: could not open codec parameters.");
         avformat_close_input(&format_context);
         avcodec_free_context(&codec_context);
         return NULL;
     }
-    AVChannelLayout* layout = malloc(sizeof(AVChannelLayout));
-    if (!layout){
-        fprintf(stderr, "Error: allocating channel layout struct failed");
+
+    if (avcodec_open2(codec_context, codec, NULL) != 0){
+        fprintf(stderr, "Error: could not open codec");
         avformat_close_input(&format_context);
         avcodec_free_context(&codec_context);
         return NULL;
     }
-    if (av_channel_layout_from_string(layout, "stereo") != 0){
+
+    AVChannelLayout layout;
+    
+    if (av_channel_layout_from_string(&layout, "stereo") != 0){
         fprintf(stderr, "Error: creating channel layout struct failed");
         avformat_close_input(&format_context);
         avcodec_free_context(&codec_context);
-        free(layout);
+        av_channel_layout_uninit(&layout);
         return NULL;
     }
     SwrContext* resampler = swr_alloc();
@@ -73,18 +80,39 @@ struct AudioFile* AudioFile_from_file(const char* filename){
         fprintf(stderr, "Error: could not allocate resampler");
         avformat_close_input(&format_context);
         avcodec_free_context(&codec_context);
-        free(layout);
+        av_channel_layout_uninit(&layout);
         return NULL;
     }
-    swr_alloc_set_opts2(
+    if (swr_alloc_set_opts2(
         &resampler, 
-        layout, AV_SAMPLE_FMT_S16, 44100,
+        &layout, AV_SAMPLE_FMT_S16, 44100,
         &codec_context->ch_layout, codec_context->sample_fmt, codec_context->sample_rate,
         0, NULL
-    );
+    ) != 0){
+        fprintf(stderr, "Error: allocating audio resampler failed");
+        avformat_close_input(&format_context);
+        avcodec_free_context(&codec_context);
+        av_channel_layout_uninit(&layout);
+        swr_free(&resampler);
+        return NULL;
+    };
+
+    if (swr_init(resampler) != 0){
+        fprintf(stderr, "Error: allocating audio resampler failed");
+        avformat_close_input(&format_context);
+        avcodec_free_context(&codec_context);
+        av_channel_layout_uninit(&layout);
+        swr_free(&resampler);
+        return NULL;
+    };
+
+    av_channel_layout_uninit(&layout);
     
     struct AudioFile* return_val = malloc(sizeof(struct AudioFile));
     if (!return_val){
+        avformat_close_input(&format_context);
+        avcodec_free_context(&codec_context);
+        swr_free(&resampler);
         return NULL;
     }
     return_val->format_context = format_context;
@@ -95,10 +123,16 @@ struct AudioFile* AudioFile_from_file(const char* filename){
 }
 
 void AudioFile_destruct(struct AudioFile* to_destroy){
+
+    if (!to_destroy){
+        return;
+    }
     avformat_close_input(&to_destroy->format_context);
     avcodec_free_context(&to_destroy->codec_context);
     swr_free(&to_destroy->resampler);
     free(to_destroy);
 }
+
+
 
 #endif
